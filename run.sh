@@ -4,6 +4,10 @@
 cd /app
 PORT_NUM="${PORT:-80}"
 
+echo "[run] ===== tgsearch -h 帮助信息 ====="
+./tgsearch.x86_64 -h 2>&1 || true
+echo "[run] ===== 帮助信息结束 ====="
+
 # 自动探测 tgsearch 搜索服务实际监听的内部端口
 detect_svc_port() {
     if netstat -tln 2>/dev/null | grep -q ':10199 '; then
