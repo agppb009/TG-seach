@@ -29,44 +29,45 @@ fi
 if [ -f v1.txt ] && [ -f v2.txt ]; then
     export API_SESSION_V1="$(cat v1.txt)"
     export API_SESSION="$(cat v2.txt)"
-    echo "[run] session 就绪，启动搜索服务 ..."
-    ./tgsearch.x86_64 -I 2>&1 &
+    echo "[run] session 就绪，用 -o 直接监听公网端口 $PORT_NUM ..."
+    ./tgsearch.x86_64 -I -o "$PORT_NUM" 2>&1 &
     SVC_PID=$!
-    sleep 15
-    SVC_PORT=$(detect_svc_port)
-    echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
+    sleep 8
 
-    # 诊断 A：PyInstaller 运行时会解包 _MEI 目录，里面有 app.pyc 源码
-    echo "[run] ===== pyc 诊断开始 ====="
-    ls -d /tmp/_MEI*/ 2>/dev/null
-    APPPYC=$(ls -S /tmp/_MEI*/*.pyc 2>/dev/null | head -1)
-    if [ -z "$APPPYC" ]; then
-        APPPYC=$(find /tmp -maxdepth 2 -iname "app*.pyc" 2>/dev/null | head -1)
-    fi
-    echo "[run] 最大 pyc: $APPPYC ($(du -k "$APPPYC" 2>/dev/null | cut -f1)KB)"
-    if [ -n "$APPPYC" ]; then
-        echo "[run] ---- pyc 全部文件清单 ----"
-        ls -S /tmp/_MEI*/*.pyc 2>/dev/null | head -15
-        echo "[run] ---- app.pyc 关键字符串（前 100 条）----"
-        grep -aoE '[ -~]{4,250}' "$APPPYC" 2>/dev/null | grep -aiE 'search|/wd|wd=|kw=|/api|route|@app|\.post|\.get\(|json|body|form|10199|18080|port|config|\.txt|cache|http|add_url_rule|request\.' | grep -avE '^[A-Za-z]:\\|site-packages|python3|importlib|__pycache__' | head -100
-        echo "[run] ---- 上传 app.pyc（多个网盘依次尝试）----"
-        U1=$(curl -s -m 90 -A "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" -F "file=@$APPPYC" https://0x0.st 2>/dev/null)
+    echo "[run] ---- _MEI 目录内容（看看有没有可抓的源码文件）----"
+    ls -la /tmp/_MEI*/ 2>/dev/null | head -50
+
+    echo "[run] ---- 容器内自测 API（结果直接可见）----"
+    for body in '{"wd":"test"}' '{"kw":"test"}' '{"q":"test"}' '{"keyword":"test"}'; do
+        echo "[api] POST / body=$body"
+        curl -s -m 20 -X POST "http://127.0.0.1:$PORT_NUM/" -H 'Content-Type: application/json' -d "$body" | head -c 400
+        echo ""
+    done
+    echo "[api] GET /search?wd=test"
+    curl -s -m 20 "http://127.0.0.1:$PORT_NUM/search?wd=test" | head -c 400
+    echo ""
+    echo "[api] GET /search POST json"
+    curl -s -m 20 -X POST "http://127.0.0.1:$PORT_NUM/search" -H 'Content-Type: application/json' -d '{"wd":"test"}' | head -c 400
+    echo ""
+    echo "[run] ---- 自测结束 ----"
+
+    echo "[run] ---- 上传 PyInstaller 内核（/tmp/staticx-*/tgsearch）----"
+    INNER=$(ls /tmp/staticx-*/tgsearch 2>/dev/null | head -1)
+    if [ -n "$INNER" ] && [ -f "$INNER" ]; then
+        echo "[run] 内核文件: $INNER ($(du -k "$INNER" | cut -f1)KB)"
+        U1=$(curl -s -m 300 -A "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" -F "file=@$INNER" https://0x0.st 2>/dev/null)
         echo "[run] 上传1(0x0.st): $U1"
         if [ -z "$U1" ]; then
-            U2=$(curl -s -m 90 -T "$APPPYC" https://bashupload.com/app.pyc 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
+            U2=$(curl -s -m 300 -T "$INNER" https://bashupload.com/tgsearch_elf 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
             echo "[run] 上传2(bashupload): $U2"
         fi
-        if [ -z "$U1$U2" ]; then
-            U3=$(curl -s -m 90 -F "file=@$APPPYC" https://temp.sh/upload 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
-            echo "[run] 上传3(temp.sh): $U3"
-        fi
-        echo "[run] >>> 请把上面的上传地址（或字符串摘要）完整复制发我 <<<"
+        echo "[run] >>> 请把上传地址完整复制发我 <<<"
     else
-        echo "[run] _MEI 目录未找到 pyc，列出 /tmp："
-        ls /tmp/ | head -20
+        echo "[run] 未找到 /tmp/staticx-*/tgsearch"
     fi
-    echo "[run] ===== pyc 诊断结束 ====="
-    exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
+    echo "[run] ---- 上传诊断结束 ----"
+    wait "$SVC_PID"
+    exit 0
 fi
 
 echo "[run] 未发现 session，进入扫码登录模式 ..."
@@ -159,13 +160,11 @@ kill "$HTTPD_PID" 2>/dev/null
 if [ -f /app/v1.txt ] && [ -f /app/v2.txt ]; then
     export API_SESSION_V1="$(cat /app/v1.txt)"
     export API_SESSION="$(cat /app/v2.txt)"
-    echo "[run] 登录完成，启动搜索服务 ..."
-    ./tgsearch.x86_64 -I 2>&1 &
+    echo "[run] 登录完成，用 -o 直接监听公网端口 $PORT_NUM ..."
+    ./tgsearch.x86_64 -I -o "$PORT_NUM" 2>&1 &
     SVC_PID=$!
-    sleep 3
-    SVC_PORT=$(detect_svc_port)
-    echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
-    exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
+    wait "$SVC_PID"
+    exit 0
 fi
 
 echo "[run] 登录失败，重启脚本 ..."
