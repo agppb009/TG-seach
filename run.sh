@@ -3,7 +3,17 @@
 # 搜索服务固定监听 18080（二进制默认端口），用 socat 把公网端口(80/$PORT)转发到 18080
 cd /app
 PORT_NUM="${PORT:-80}"
-SVC_PORT=18080
+
+# 自动探测 tgsearch 搜索服务实际监听的内部端口
+detect_svc_port() {
+    if netstat -tln 2>/dev/null | grep -q ':10199 '; then
+        echo 10199
+    elif netstat -tln 2>/dev/null | grep -q ':18080 '; then
+        echo 18080
+    else
+        echo 10199
+    fi
+}
 
 # 优先使用注入的环境变量
 if [ -n "$API_SESSION_V1" ] && [ -n "$API_SESSION" ]; then
@@ -15,11 +25,12 @@ fi
 if [ -f v1.txt ] && [ -f v2.txt ]; then
     export API_SESSION_V1="$(cat v1.txt)"
     export API_SESSION="$(cat v2.txt)"
-    echo "[run] session 就绪，启动搜索服务 (内部 $SVC_PORT，对外 $PORT_NUM) ..."
-    ./tgsearch.x86_64 -I >> tg.log 2>&1 &
+    echo "[run] session 就绪，启动搜索服务 ..."
+    ./tgsearch.x86_64 -I 2>&1 &
     SVC_PID=$!
-    sleep 2
-    echo "[run] 启动端口转发 $PORT_NUM -> $SVC_PORT ..."
+    sleep 3
+    SVC_PORT=$(detect_svc_port)
+    echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
     exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 
@@ -113,11 +124,12 @@ kill "$HTTPD_PID" 2>/dev/null
 if [ -f /app/v1.txt ] && [ -f /app/v2.txt ]; then
     export API_SESSION_V1="$(cat /app/v1.txt)"
     export API_SESSION="$(cat /app/v2.txt)"
-    echo "[run] 登录完成，启动搜索服务 (内部 $SVC_PORT，对外 $PORT_NUM) ..."
-    ./tgsearch.x86_64 -I >> tg.log 2>&1 &
+    echo "[run] 登录完成，启动搜索服务 ..."
+    ./tgsearch.x86_64 -I 2>&1 &
     SVC_PID=$!
-    sleep 2
-    echo "[run] 启动端口转发 $PORT_NUM -> $SVC_PORT ..."
+    sleep 3
+    SVC_PORT=$(detect_svc_port)
+    echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
     exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 
