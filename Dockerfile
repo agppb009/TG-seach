@@ -6,7 +6,7 @@ FROM alpine:3.19
 RUN echo "https://mirrors.aliyun.com/alpine/v3.19/main" > /etc/apk/repositories && \
     echo "https://mirrors.aliyun.com/alpine/v3.19/community" >> /etc/apk/repositories && \
     apk update && \
-    apk add --no-cache bash busybox-extras socat zlib readline ncurses-libs coreutils && \
+    apk add --no-cache bash busybox-extras socat curl zlib readline ncurses-libs coreutils && \
     rm -rf /var/cache/apk/*
 
 WORKDIR /app
