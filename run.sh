@@ -1,9 +1,9 @@
 #!/bin/bash
-# tgsearch 智能启动脚本 v2
-# 1) 有 session（环境变量或文件）→ 直接启动搜索服务
-# 2) 无 session → 立即在 $PORT/80 提供扫码登录页（JS 本地渲染二维码），扫码后自动切换为搜索服务
+# tgsearch 智能启动脚本 v3
+# 搜索服务固定监听 18080（二进制默认端口），用 socat 把公网端口(80/$PORT)转发到 18080
 cd /app
 PORT_NUM="${PORT:-80}"
+SVC_PORT=18080
 
 # 优先使用注入的环境变量
 if [ -n "$API_SESSION_V1" ] && [ -n "$API_SESSION" ]; then
@@ -12,15 +12,15 @@ if [ -n "$API_SESSION_V1" ] && [ -n "$API_SESSION" ]; then
     echo "[run] 已从环境变量写入 session 文件"
 fi
 
-start_search() {
-    echo "[run] 启动 tgsearch 搜索服务 (端口 $PORT_NUM) ..."
-    exec ./tgsearch.x86_64 -I
-}
-
 if [ -f v1.txt ] && [ -f v2.txt ]; then
     export API_SESSION_V1="$(cat v1.txt)"
     export API_SESSION="$(cat v2.txt)"
-    start_search
+    echo "[run] session 就绪，启动搜索服务 (内部 $SVC_PORT，对外 $PORT_NUM) ..."
+    ./tgsearch.x86_64 -I >> tg.log 2>&1 &
+    SVC_PID=$!
+    sleep 2
+    echo "[run] 启动端口转发 $PORT_NUM -> $SVC_PORT ..."
+    exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 
 echo "[run] 未发现 session，进入扫码登录模式 ..."
@@ -69,17 +69,11 @@ HTMLEOF
 echo "<!-- placeholder -->" > www/token.txt
 cp /app/qrcode.min.js www/qrcode.min.js 2>/dev/null || echo "[run] 警告: qrcode.min.js 缺失"
 
-# 立即启动 httpd（保证 Render/Koyeb 探测到开放端口）
+# 立即启动 httpd（保证平台探测到开放端口）
 echo "[run] 启动扫码网页服务 (端口 $PORT_NUM) ..."
 busybox httpd -f -p "$PORT_NUM" -h /app/www >> httpd.log 2>&1 &
 HTTPD_PID=$!
 sleep 1
-if ! kill -0 "$HTTPD_PID" 2>/dev/null; then
-    echo "[run] busybox httpd 启动失败，尝试 httpd 二进制 ..."
-    httpd -f -p "$PORT_NUM" -h /app/www >> httpd.log 2>&1 &
-    HTTPD_PID=$!
-    sleep 1
-fi
 echo "[run] httpd pid=$HTTPD_PID"
 
 # 跑 QR 登录流程，逐行处理输出
@@ -115,10 +109,16 @@ for attempt in 1 2 3; do
 done
 
 kill "$HTTPD_PID" 2>/dev/null
+
 if [ -f /app/v1.txt ] && [ -f /app/v2.txt ]; then
     export API_SESSION_V1="$(cat /app/v1.txt)"
     export API_SESSION="$(cat /app/v2.txt)"
-    start_search
+    echo "[run] 登录完成，启动搜索服务 (内部 $SVC_PORT，对外 $PORT_NUM) ..."
+    ./tgsearch.x86_64 -I >> tg.log 2>&1 &
+    SVC_PID=$!
+    sleep 2
+    echo "[run] 启动端口转发 $PORT_NUM -> $SVC_PORT ..."
+    exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 
 echo "[run] 登录失败，重启脚本 ..."
