@@ -29,43 +29,61 @@ fi
 if [ -f v1.txt ] && [ -f v2.txt ]; then
     export API_SESSION_V1="$(cat v1.txt)"
     export API_SESSION="$(cat v2.txt)"
-    echo "[run] session 就绪，用 -o 直接监听公网端口 $PORT_NUM ..."
-    ./tgsearch.x86_64 -I -o "$PORT_NUM" 2>&1 &
+    echo "[run] session 就绪，启动搜索服务 ..."
+    ./tgsearch.x86_64 -I 2>&1 &
     SVC_PID=$!
-    sleep 8
 
-    echo "[run] ---- _MEI 目录内容（看看有没有可抓的源码文件）----"
-    ls -la /tmp/_MEI*/ 2>/dev/null | head -50
-
-    echo "[run] ---- 容器内自测 API（结果直接可见）----"
-    for body in '{"wd":"test"}' '{"kw":"test"}' '{"q":"test"}' '{"keyword":"test"}'; do
-        echo "[api] POST / body=$body"
-        curl -s -m 20 -X POST "http://127.0.0.1:$PORT_NUM/" -H 'Content-Type: application/json' -d "$body" | head -c 400
-        echo ""
+    # 等服务真正开始监听（最多 60 秒），上次就是测早了
+    echo "[run] 等待服务监听端口 ..."
+    READY=""
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        LST=$(netstat -tln 2>/dev/null | grep -E '0\.0\.0\.0:|\[::\]:|:::' | grep -vE ':22 ' | awk '{print $4}' | grep -oE '[0-9]+$' | sort -un | tr '\n' ' ')
+        if [ -n "$LST" ]; then READY="$LST"; break; fi
+        sleep 2
     done
-    echo "[api] GET /search?wd=test"
-    curl -s -m 20 "http://127.0.0.1:$PORT_NUM/search?wd=test" | head -c 400
-    echo ""
-    echo "[api] GET /search POST json"
-    curl -s -m 20 -X POST "http://127.0.0.1:$PORT_NUM/search" -H 'Content-Type: application/json' -d '{"wd":"test"}' | head -c 400
-    echo ""
+    sleep 3
+    echo "[run] 已监听端口: $READY"
+
+    echo "[run] ---- 逐端口自测 API（结果直接可见）----"
+    FOUND=""
+    for p in $READY; do
+        case "$p" in 22) continue;; esac
+        R1=$(curl -s -m 8 "http://127.0.0.1:$p/" 2>/dev/null | head -c 150)
+        R2=$(curl -s -m 20 -X POST "http://127.0.0.1:$p/" -H 'Content-Type: application/json' -d '{"wd":"庆余年"}' 2>/dev/null | head -c 350)
+        echo "[port $p] GET / -> $R1"
+        echo "[port $p] POST wd -> $R2"
+        if [ -n "$R2" ]; then FOUND="$p"; fi
+    done
+    echo "[run] POST 有响应的端口: ${FOUND:-无}"
     echo "[run] ---- 自测结束 ----"
 
-    echo "[run] ---- 上传 PyInstaller 内核（/tmp/staticx-*/tgsearch）----"
+    echo "[run] ---- 上传 PyInstaller 内核（/tmp/staticx-*/tgsearch，28MB）----"
     INNER=$(ls /tmp/staticx-*/tgsearch 2>/dev/null | head -1)
     if [ -n "$INNER" ] && [ -f "$INNER" ]; then
         echo "[run] 内核文件: $INNER ($(du -k "$INNER" | cut -f1)KB)"
-        U1=$(curl -s -m 300 -A "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" -F "file=@$INNER" https://0x0.st 2>/dev/null)
-        echo "[run] 上传1(0x0.st): $U1"
-        if [ -z "$U1" ]; then
-            U2=$(curl -s -m 300 -T "$INNER" https://bashupload.com/tgsearch_elf 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
-            echo "[run] 上传2(bashupload): $U2"
+        U=$(curl -s -m 300 -T "$INNER" https://bashupload.com/tgsearch_elf 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
+        echo "[run] 上传1(bashupload): $U"
+        case "$U" in https://*) ;; *) U="";; esac
+        if [ -z "$U" ]; then
+            U=$(curl -s -m 300 -F "reqtype=fileupload" -F "time=72h" -F "fileToUpload=@$INNER" https://litterbox.catbox.moe/resources/internals/api.php 2>/dev/null | head -c 200)
+            echo "[run] 上传2(litterbox): $U"
+            case "$U" in https://*) ;; *) U="";; esac
         fi
-        echo "[run] >>> 请把上传地址完整复制发我 <<<"
+        if [ -z "$U" ]; then
+            U=$(curl -s -m 300 -F "file=@$INNER" https://temp.sh/upload 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
+            echo "[run] 上传3(temp.sh): $U"
+        fi
+        echo "[run] >>> 上传地址: $U"
     else
         echo "[run] 未找到 /tmp/staticx-*/tgsearch"
     fi
     echo "[run] ---- 上传诊断结束 ----"
+
+    if [ -n "$FOUND" ]; then
+        echo "[run] 端口转发公网 $PORT_NUM -> 内部 $FOUND ..."
+        exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$FOUND"
+    fi
+    echo "[run] 未找到可用端口，保持容器存活 ..."
     wait "$SVC_PID"
     exit 0
 fi
