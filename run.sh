@@ -1,21 +1,26 @@
 #!/bin/bash
-# tgsearch 智能启动脚本
-# 1) 有 session（环境变量或文件）→ 直接启动搜索服务(:80)
-# 2) 无 session → 在 :80 显示 Telegram 扫码登录页，扫码后自动启动
+# tgsearch 智能启动脚本 v2
+# 1) 有 session（环境变量或文件）→ 直接启动搜索服务
+# 2) 无 session → 立即在 $PORT/80 提供扫码登录页（JS 本地渲染二维码），扫码后自动切换为搜索服务
 cd /app
+PORT_NUM="${PORT:-80}"
 
-# 优先使用注入的环境变量（Koyeb Settings -> Environment Variables）
+# 优先使用注入的环境变量
 if [ -n "$API_SESSION_V1" ] && [ -n "$API_SESSION" ]; then
     echo "$API_SESSION_V1" > v1.txt
     echo "$API_SESSION" > v2.txt
     echo "[run] 已从环境变量写入 session 文件"
 fi
 
+start_search() {
+    echo "[run] 启动 tgsearch 搜索服务 (端口 $PORT_NUM) ..."
+    exec ./tgsearch.x86_64 -I
+}
+
 if [ -f v1.txt ] && [ -f v2.txt ]; then
     export API_SESSION_V1="$(cat v1.txt)"
     export API_SESSION="$(cat v2.txt)"
-    echo "[run] session 就绪，启动 tgsearch 服务 (端口 80) ..."
-    exec ./tgsearch.x86_64 -I
+    start_search
 fi
 
 echo "[run] 未发现 session，进入扫码登录模式 ..."
@@ -24,54 +29,98 @@ mkdir -p www
 cat > www/index.html <<'HTMLEOF'
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Telegram 扫码登录</title>
-<meta http-equiv="refresh" content="15">
-<style>body{text-align:center;font-family:-apple-system,sans-serif;background:#f5f5f5;padding-top:30px}
-.card{background:#fff;max-width:480px;margin:0 auto;padding:24px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1)}</style></head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{text-align:center;font-family:-apple-system,'Segoe UI',sans-serif;background:#f2f4f8;padding-top:30px;color:#1f2330}
+.card{background:#fff;max-width:500px;margin:0 auto;padding:28px;border-radius:14px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+#qrbox{display:inline-block;padding:12px;background:#fff;border:1px solid #e3e6ee;border-radius:8px;margin:14px 0}
+#qrbox img,#qrbox canvas{width:300px;height:300px}
+.tip{font-size:14px;color:#555;line-height:1.7}
+.ok{color:#0a8f4a;font-weight:600}
+#st{font-size:13px;color:#888}</style></head>
 <body><div class="card">
 <h2>📱 用 Telegram 扫码登录</h2>
-<p>打开手机 Telegram → <b>设置 → 设备 → 链接桌面设备</b><br>扫描下方二维码</p>
-<img src="/qr.png" width="380" height="380" alt="QR">
-<p>扫码成功后本页会自动变成搜索页面，请稍候。</p>
+<div id="qrbox"><img id="qrimg" alt="QR" width="300" height="300"></div>
+<p class="tip">打开手机 <b>Telegram</b> → 设置 → <b>设备</b> → <b>链接桌面设备</b><br>扫描上方二维码</p>
+<p class="tip ok">扫码成功后本页会自动变成搜索页面</p>
+<p id="st">正在获取二维码…</p>
+<script src="/qrcode.min.js"></script>
+<script>
+var curToken = "";
+function refresh() {
+    fetch("/token.txt?t=" + Date.now(), {cache:"no-store"})
+        .then(function(r){ return r.ok ? r.text() : ""; })
+        .then(function(t) {
+            t = t.trim();
+            if (!t) { document.getElementById("st").textContent = "等待服务器生成登录码…"; return; }
+            if (t === curToken) return;
+            curToken = t;
+            var box = document.getElementById("qrbox");
+            box.innerHTML = "";
+            new QRCode(box, {text: t, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M});
+            document.getElementById("st").textContent = "二维码已就绪，请扫描";
+        })
+        .catch(function(){});
+}
+refresh();
+setInterval(refresh, 8000);
+</script>
 </div></body></html>
 HTMLEOF
+echo "<!-- placeholder -->" > www/token.txt
+cp /app/qrcode.min.js www/qrcode.min.js 2>/dev/null || echo "[run] 警告: qrcode.min.js 缺失"
+
+# 立即启动 httpd（保证 Render/Koyeb 探测到开放端口）
+echo "[run] 启动扫码网页服务 (端口 $PORT_NUM) ..."
+busybox httpd -f -p "$PORT_NUM" -h /app/www >> httpd.log 2>&1 &
+HTTPD_PID=$!
+sleep 1
+if ! kill -0 "$HTTPD_PID" 2>/dev/null; then
+    echo "[run] busybox httpd 启动失败，尝试 httpd 二进制 ..."
+    httpd -f -p "$PORT_NUM" -h /app/www >> httpd.log 2>&1 &
+    HTTPD_PID=$!
+    sleep 1
+fi
+echo "[run] httpd pid=$HTTPD_PID"
 
 # 跑 QR 登录流程，逐行处理输出
-./tgsearch.x86_64 -q 2>&1 | while IFS= read -r line; do
-    echo "[tg] $line"
-    case "$line" in
-        *"V1 QRCode Login Url:"*)
-            url=$(echo "$line" | sed 's/.*V1 QRCode Login Url: //')
-            qrencode -o /app/www/qr.png -s 8 "$url"
-            echo "[run] 二维码已生成，80 端口开始提供扫码页 —— 请打开公网地址扫码"
-            (busybox httpd -f -p 80 -h /app/www &>/dev/null &)
-            ;;
-        *"V1 session_string:"*)
-            s1=$(echo "$line" | sed 's/.*session_string: //')
-            echo "$s1" > v1.txt
-            echo "[run] V1 session 已保存！"
-            echo "[run] >>> 请立刻复制下面这行到 Koyeb 环境变量 API_SESSION_V1 <<<"
-            echo "$s1"
-            ;;
-        *"V2 session_string:"*)
-            s2=$(echo "$line" | sed 's/.*V2 session_string: //')
-            echo "$s2" > v2.txt
-            echo "[run] V2 session 已保存！"
-            echo "[run] >>> 请立刻复制下面这行到 Koyeb 环境变量 API_SESSION <<<"
-            echo "$s2"
-            break
-            ;;
-    esac
+for attempt in 1 2 3; do
+    echo "[run] 第 $attempt 次尝试登录 ..."
+    ./tgsearch.x86_64 -q 2>&1 | while IFS= read -r line; do
+        case "$line" in
+            *"V1 QRCode Login Url:"*)
+                url="${line#*V1 QRCode Login Url: }"
+                printf "%s" "$url" > /app/www/token.txt
+                echo "[run] 登录码已更新，请打开公网地址扫码"
+                ;;
+            *"V1 session_string:"*)
+                s1="${line#*V1 session_string: }"
+                echo "$s1" > /app/v1.txt
+                echo "[run] V1 session 已保存！"
+                echo "[run] >>> 请立刻复制下面这行到 Render 环境变量 API_SESSION_V1 <<<"
+                echo "$s1"
+                ;;
+            *"V2 session_string:"*)
+                s2="${line#*V2 session_string: }"
+                echo "$s2" > /app/v2.txt
+                echo "[run] V2 session 已保存！"
+                echo "[run] >>> 请立刻复制下面这行到 Render 环境变量 API_SESSION <<<"
+                echo "$s2"
+                break
+                ;;
+        esac
+    done
+    if [ -f /app/v1.txt ] && [ -f /app/v2.txt ]; then break; fi
+    echo "[run] 登录未完成，15 秒后重试 ..."
+    sleep 15
 done
 
-if [ ! -f v1.txt ] || [ ! -f v2.txt ]; then
-    echo "[run] 登录未完成，10 秒后重试 ..."
-    sleep 10
-    exec /app/run.sh
+kill "$HTTPD_PID" 2>/dev/null
+if [ -f /app/v1.txt ] && [ -f /app/v2.txt ]; then
+    export API_SESSION_V1="$(cat /app/v1.txt)"
+    export API_SESSION="$(cat /app/v2.txt)"
+    start_search
 fi
 
-pkill -f "busybox httpd" 2>/dev/null
-sleep 1
-export API_SESSION_V1="$(cat v1.txt)"
-export API_SESSION="$(cat v2.txt)"
-echo "[run] 启动 tgsearch 搜索服务 (端口 80) ..."
-exec ./tgsearch.x86_64 -I
+echo "[run] 登录失败，重启脚本 ..."
+sleep 3
+exec /app/run.sh
