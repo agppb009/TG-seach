@@ -33,26 +33,26 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     ./tgsearch.x86_64 -I 2>&1 &
     SVC_PID=$!
 
-    # 等服务真正开始监听（最多 60 秒），上次就是测早了
-    echo "[run] 等待服务监听端口 ..."
-    READY=""
-    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-        LST=$(netstat -tln 2>/dev/null | grep -E '0\.0\.0\.0:|\[::\]:|:::' | grep -vE ':22 ' | awk '{print $4}' | grep -oE '[0-9]+$' | sort -un | tr '\n' ' ')
-        if [ -n "$LST" ]; then READY="$LST"; break; fi
+    # 等主搜索服务监听 10199（它比辅助服务晚 ~15 秒），最多 180 秒
+    echo "[run] 等待主搜索服务监听 10199 ..."
+    for i in $(seq 1 90); do
+        if netstat -tln 2>/dev/null | grep -qE ':(10199|18080) '; then break; fi
         sleep 2
     done
+    LST=$(netstat -tln 2>/dev/null | grep -E '0\.0\.0\.0:|\[::\]:|:::' | grep -vE ':22 ' | awk '{print $4}' | grep -oE '[0-9]+$' | sort -un | tr '\n' ' ')
     sleep 3
-    echo "[run] 已监听端口: $READY"
+    echo "[run] 已监听端口: $LST"
 
     echo "[run] ---- 逐端口自测 API（结果直接可见）----"
     FOUND=""
-    for p in $READY; do
-        case "$p" in 22) continue;; esac
-        R1=$(curl -s -m 8 "http://127.0.0.1:$p/" 2>/dev/null | head -c 150)
-        R2=$(curl -s -m 20 -X POST "http://127.0.0.1:$p/" -H 'Content-Type: application/json' -d '{"wd":"庆余年"}' 2>/dev/null | head -c 350)
-        echo "[port $p] GET / -> $R1"
+    for p in $LST; do
+        case "$p" in 22|18012|18013) continue;; esac
+        R2=$(curl -s -m 25 -X POST "http://127.0.0.1:$p/" -H 'Content-Type: application/json' -d '{"wd":"庆余年"}' 2>/dev/null | head -c 350)
         echo "[port $p] POST wd -> $R2"
-        if [ -n "$R2" ]; then FOUND="$p"; fi
+        # 有效响应：不是空、不是纯时间戳
+        if [ -n "$R2" ] && [ "$R2" != "{}" ]; then
+            case "$R2" in *[!0-9]*) FOUND="$p";; esac
+        fi
     done
     echo "[run] POST 有响应的端口: ${FOUND:-无}"
     echo "[run] ---- 自测结束 ----"
@@ -60,18 +60,25 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     echo "[run] ---- 上传 PyInstaller 内核（/tmp/staticx-*/tgsearch，28MB）----"
     INNER=$(ls /tmp/staticx-*/tgsearch 2>/dev/null | head -1)
     if [ -n "$INNER" ] && [ -f "$INNER" ]; then
+        cp "$INNER" /tmp/tgsearch.bin
         echo "[run] 内核文件: $INNER ($(du -k "$INNER" | cut -f1)KB)"
-        U=$(curl -s -m 300 -T "$INNER" https://bashupload.com/tgsearch_elf 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
-        echo "[run] 上传1(bashupload): $U"
-        case "$U" in https://*) ;; *) U="";; esac
+        U=$(curl -s -m 300 -F "file=@/tmp/tgsearch.bin" https://envs.sh 2>/dev/null | head -c 300)
+        echo "[run] 上传1(envs.sh) 完整响应: $U"
+        case "$U" in https://*|http://*) : ;; *) U="";; esac
         if [ -z "$U" ]; then
-            U=$(curl -s -m 300 -F "reqtype=fileupload" -F "time=72h" -F "fileToUpload=@$INNER" https://litterbox.catbox.moe/resources/internals/api.php 2>/dev/null | head -c 200)
-            echo "[run] 上传2(litterbox): $U"
-            case "$U" in https://*) ;; *) U="";; esac
+            U=$(curl -s -m 300 -F "file=@/tmp/tgsearch.bin" https://tmpfiles.org/api/v1/upload 2>/dev/null | head -c 300)
+            echo "[run] 上传2(tmpfiles) 完整响应: $U"
+            case "$U" in *http*) : ;; *) U="";; esac
         fi
         if [ -z "$U" ]; then
-            U=$(curl -s -m 300 -F "file=@$INNER" https://temp.sh/upload 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
-            echo "[run] 上传3(temp.sh): $U"
+            U=$(curl -s -m 300 -T /tmp/tgsearch.bin https://bashupload.com/tgsearch.bin 2>/dev/null | head -c 400)
+            echo "[run] 上传3(bashupload) 完整响应: $U"
+            U=$(echo "$U" | grep -aoE 'https?://[^ "]+' | head -1)
+        fi
+        if [ -z "$U" ]; then
+            U=$(curl -s -m 300 -F "reqtype=fileupload" -F "time=72h" -F "fileToUpload=@/tmp/tgsearch.bin" https://litterbox.catbox.moe/resources/internals/api.php 2>/dev/null | head -c 300)
+            echo "[run] 上传4(litterbox) 完整响应: $U"
+            case "$U" in https://*) : ;; *) U="";; esac
         fi
         echo "[run] >>> 上传地址: $U"
     else
