@@ -36,23 +36,36 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     SVC_PORT=$(detect_svc_port)
     echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
 
-    # 诊断：把 staticx 解包出的 PyInstaller 内核 ELF 上传，供本地解析 API 格式
-    echo "[run] ===== 内核文件上传诊断 ====="
-    ls -la /tmp/staticx-*/ 2>/dev/null | head -10
-    INNER=$(ls /tmp/staticx-*/tgsearch.x86_64.so.1 2>/dev/null | head -1)
-    if [ -z "$INNER" ]; then
-        INNER=$(du -k /tmp/staticx-/* 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
+    # 诊断 A：PyInstaller 运行时会解包 _MEI 目录，里面有 app.pyc 源码
+    echo "[run] ===== pyc 诊断开始 ====="
+    ls -d /tmp/_MEI*/ 2>/dev/null
+    APPPYC=$(ls -S /tmp/_MEI*/*.pyc 2>/dev/null | head -1)
+    if [ -z "$APPPYC" ]; then
+        APPPYC=$(find /tmp -maxdepth 2 -iname "app*.pyc" 2>/dev/null | head -1)
     fi
-    if [ -n "$INNER" ] && [ -f "$INNER" ]; then
-        echo "[run] 找到内核文件: $INNER ($(du -h "$INNER" | cut -f1))"
-        UPLOAD_URL=$(curl -s -m 120 -F "file=@$INNER" https://0x0.st 2>/dev/null)
-        echo "[run] 上传地址: $UPLOAD_URL"
-        echo "[run] >>> 请把上面这行上传地址完整复制出来 <<<"
+    echo "[run] 最大 pyc: $APPPYC ($(du -k "$APPPYC" 2>/dev/null | cut -f1)KB)"
+    if [ -n "$APPPYC" ]; then
+        echo "[run] ---- pyc 全部文件清单 ----"
+        ls -S /tmp/_MEI*/*.pyc 2>/dev/null | head -15
+        echo "[run] ---- app.pyc 关键字符串（前 100 条）----"
+        grep -aoE '[ -~]{4,250}' "$APPPYC" 2>/dev/null | grep -aiE 'search|/wd|wd=|kw=|/api|route|@app|\.post|\.get\(|json|body|form|10199|18080|port|config|\.txt|cache|http|add_url_rule|request\.' | grep -avE '^[A-Za-z]:\\|site-packages|python3|importlib|__pycache__' | head -100
+        echo "[run] ---- 上传 app.pyc（多个网盘依次尝试）----"
+        U1=$(curl -s -m 90 -A "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" -F "file=@$APPPYC" https://0x0.st 2>/dev/null)
+        echo "[run] 上传1(0x0.st): $U1"
+        if [ -z "$U1" ]; then
+            U2=$(curl -s -m 90 -T "$APPPYC" https://bashupload.com/app.pyc 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
+            echo "[run] 上传2(bashupload): $U2"
+        fi
+        if [ -z "$U1$U2" ]; then
+            U3=$(curl -s -m 90 -F "file=@$APPPYC" https://temp.sh/upload 2>/dev/null | grep -aoE 'https?://[^ "]+' | head -1)
+            echo "[run] 上传3(temp.sh): $U3"
+        fi
+        echo "[run] >>> 请把上面的上传地址（或字符串摘要）完整复制发我 <<<"
     else
-        echo "[run] 未找到内核文件"
-        ls -la /tmp/
+        echo "[run] _MEI 目录未找到 pyc，列出 /tmp："
+        ls /tmp/ | head -20
     fi
-    echo "[run] ===== 内核文件上传诊断结束 ====="
+    echo "[run] ===== pyc 诊断结束 ====="
     exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 
