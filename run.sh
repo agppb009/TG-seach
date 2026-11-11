@@ -32,9 +32,17 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     echo "[run] session 就绪，启动搜索服务 ..."
     ./tgsearch.x86_64 -I 2>&1 &
     SVC_PID=$!
-    sleep 3
+    sleep 15
     SVC_PORT=$(detect_svc_port)
     echo "[run] 检测到服务端口: $SVC_PORT，启动端口转发 $PORT_NUM -> $SVC_PORT ..."
+
+    # 诊断：解出内嵌 pyc 的关键字符串，弄清 API 请求格式
+    echo "[run] ===== pyc 字符串诊断开始 ====="
+    find /tmp -name "*.pyc" -size +50k 2>/dev/null | head -5 | while read -r f; do
+        echo "[pyc] $f"
+        grep -aoE '[ -~]{6,120}' "$f" 2>/dev/null | grep -aiE 'search|wd|channel|/api|/search|param|json\.|loads|route|@app|get\(|post\(|10199|flask|fastapi' | head -50
+    done
+    echo "[run] ===== pyc 字符串诊断结束 ====="
     exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
 fi
 
