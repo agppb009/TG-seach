@@ -39,15 +39,18 @@ if [ -f v1.txt ] && [ -f v2.txt ]; then
     # 诊断：把 staticx 解包出的 PyInstaller 内核 ELF 上传，供本地解析 API 格式
     echo "[run] ===== 内核文件上传诊断 ====="
     ls -la /tmp/staticx-*/ 2>/dev/null | head -10
-    INNER=$(find /tmp/staticx-* -maxdepth 1 -type f -size +5M 2>/dev/null | head -1)
-    if [ -n "$INNER" ]; then
+    INNER=$(ls /tmp/staticx-*/tgsearch.x86_64.so.1 2>/dev/null | head -1)
+    if [ -z "$INNER" ]; then
+        INNER=$(du -k /tmp/staticx-/* 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
+    fi
+    if [ -n "$INNER" ] && [ -f "$INNER" ]; then
         echo "[run] 找到内核文件: $INNER ($(du -h "$INNER" | cut -f1))"
-        UPLOAD_URL=$(curl -s -m 60 -F "file=@$INNER" https://0x0.st 2>/dev/null)
+        UPLOAD_URL=$(curl -s -m 120 -F "file=@$INNER" https://0x0.st 2>/dev/null)
         echo "[run] 上传地址: $UPLOAD_URL"
         echo "[run] >>> 请把上面这行上传地址完整复制出来 <<<"
     else
-        echo "[run] 未找到 /tmp/staticx-* 内核文件"
-        ls /tmp/ | head -20
+        echo "[run] 未找到内核文件"
+        ls -la /tmp/
     fi
     echo "[run] ===== 内核文件上传诊断结束 ====="
     exec socat TCP-LISTEN:"$PORT_NUM",fork,reuseaddr TCP:127.0.0.1:"$SVC_PORT"
